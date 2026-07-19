@@ -55,9 +55,13 @@ function mapRow(row: PublicRow): PublicAppliance {
 
 export async function listPublicAppliances(): Promise<PublicAppliance[]> {
   if (!configured()) return process.env.NODE_ENV === "development" ? developmentAppliances : [];
-  const { data, error } = await client().rpc("list_public_appliances");
-  if (error) throw new Error("Public inventory is temporarily unavailable.");
-  return (data as PublicRow[]).map(mapRow);
+  try {
+    const { data, error } = await client().rpc("list_public_appliances");
+    if (error) return [];
+    return (data as PublicRow[]).map(mapRow);
+  } catch {
+    return [];
+  }
 }
 
 export async function getPublicAppliance(publicId: string): Promise<PublicAppliance | null> {

@@ -21,6 +21,7 @@
     "db:reset": "supabase db reset",
     "db:test": "supabase test db",
     "db:types": "supabase gen types --lang typescript --local --schema public > src/lib/supabase/database.types.ts",
+    "bootstrap:admin": "node --env-file-if-exists=.env.local --import tsx scripts/bootstrap-admin.ts",
     "reservations:expire": "node scripts/release-expired-reservations.mjs",
     "check": "npm run lint && npm run typecheck && npm run format:check && npm test && npm run build"
   },
@@ -46,6 +47,7 @@
     "prettier": "^3.9.5",
     "supabase": "2.109.1",
     "tailwindcss": "^4.2.0",
+    "tsx": "^4.23.1",
     "typescript": "^5.9.0",
     "vitest": "^4.1.10"
   }

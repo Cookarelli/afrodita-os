@@ -23,6 +23,29 @@ Raw invitation tokens are never stored. Pending invitations expire after 72
 hours in the server helper. `expire_invitations()` is executable only by the
 service role and is intended for a scheduled trusted-server job.
 
+## First administrator and later staff invitations
+
+After linking the intended Supabase project, applying all migrations, and setting
+the server environment variables, provision the first administrator once with:
+
+```bash
+npm run bootstrap:admin -- --email steven@example.com
+```
+
+The command is server-only and idempotent. It creates the Afrodita Appliances
+organization only when absent, activates the matching profile and membership,
+and ensures one active `super_admin` assignment. If the Auth user does not yet
+exist, Supabase sends its normal password-setup invitation; the command never
+prints the link, password, token, or any secret.
+
+For Erica and later employees, do not use the bootstrap command. A signed-in
+super administrator should use the existing `createInvitation` server helper
+with the employee's email and the least-privileged role. Until the Users screen
+is implemented, invoke that helper only from a trusted, authenticated server
+workflow; never create roles or memberships from the browser or Supabase SQL
+editor. The employee accepts the emailed invitation, then signs in through
+`/staff/login`.
+
 ## Sign-in and recovery
 
 - `/login` uses `signInWithPassword` and a validated local `next` path.
