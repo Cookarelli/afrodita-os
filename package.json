@@ -1,0 +1,52 @@
+{
+  "name": "afrodita-os",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build --webpack",
+    "start": "next start",
+    "lint": "eslint . --max-warnings=0",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "db:start": "supabase start",
+    "db:stop": "supabase stop",
+    "db:reset": "supabase db reset",
+    "db:test": "supabase test db",
+    "db:types": "supabase gen types --lang typescript --local --schema public > src/lib/supabase/database.types.ts",
+    "reservations:expire": "node scripts/release-expired-reservations.mjs",
+    "check": "npm run lint && npm run typecheck && npm run format:check && npm test && npm run build"
+  },
+  "dependencies": {
+    "@hookform/resolvers": "^5.4.0",
+    "@supabase/ssr": "^0.12.0",
+    "@supabase/supabase-js": "^2.110.7",
+    "next": "16.2.10",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "react-hook-form": "^7.81.0",
+    "stripe": "^22.3.2",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "@tailwindcss/postcss": "^4.2.0",
+    "@types/node": "^24.10.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "eslint": "^9.39.0",
+    "eslint-config-next": "16.2.10",
+    "prettier": "^3.9.5",
+    "supabase": "2.109.1",
+    "tailwindcss": "^4.2.0",
+    "typescript": "^5.9.0",
+    "vitest": "^4.1.10"
+  }
+}
