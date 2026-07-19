@@ -94,7 +94,9 @@ export default async function AppliancePage({ params }: { params: Promise<{ publ
               )}
             </div>
             <div className="detail-copy">
-              <span className="status-badge inline-badge">Available</span>
+              <span className="status-badge inline-badge">
+                {item.availability === "reserved" ? "Reserved" : "Available"}
+              </span>
               <p className="card-category">{categoryLabel(item.category)}</p>
               <h1>{name}</h1>
               <p className="detail-price">{formatPrice(item.priceCents)}</p>

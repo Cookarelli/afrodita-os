@@ -116,6 +116,7 @@ export const developmentAppliances: PublicAppliance[] = [
   priceCents: row[10] as number,
   description: row[11] as string,
   currency: "usd",
+  availability: "available",
   availableAt: new Date(now - index * 86400000).toISOString(),
   photos: [],
 }));

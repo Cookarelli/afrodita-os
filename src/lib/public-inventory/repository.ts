@@ -48,6 +48,7 @@ function mapRow(row: PublicRow): PublicAppliance {
     description: (row.public_description as string | null) ?? null,
     priceCents: row.public_price_cents == null ? null : Number(row.public_price_cents),
     currency: String(row.currency ?? "usd"),
+    availability: row.availability === "reserved" ? "reserved" : "available",
     availableAt: (row.available_at as string | null) ?? null,
     photos,
   };
@@ -67,10 +68,14 @@ export async function listPublicAppliances(): Promise<PublicAppliance[]> {
 export async function getPublicAppliance(publicId: string): Promise<PublicAppliance | null> {
   if (!configured())
     return developmentAppliances.find((item) => item.publicId === publicId) ?? null;
-  const { data, error } = await client().rpc("get_public_appliance", {
-    target_public_id: publicId,
-  });
-  if (error) throw new Error("Appliance details are temporarily unavailable.");
-  const row = (data as PublicRow[])[0];
-  return row ? mapRow(row) : null;
+  try {
+    const { data, error } = await client().rpc("get_public_appliance", {
+      target_public_id: publicId,
+    });
+    if (error) return null;
+    const row = (data as PublicRow[])[0];
+    return row ? mapRow(row) : null;
+  } catch {
+    return null;
+  }
 }

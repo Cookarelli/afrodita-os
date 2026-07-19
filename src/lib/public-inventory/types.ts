@@ -17,6 +17,7 @@ export interface PublicAppliance {
   description: string | null;
   priceCents: number | null;
   currency: string;
+  availability: "available" | "reserved";
   availableAt: string | null;
   photos: PublicPhoto[];
 }

@@ -10,6 +10,10 @@ export const categoryLabel = (category: string) =>
     range: "Stove & range",
     freezer: "Freezer",
     "laundry-center": "Laundry center",
+    dishwasher: "Dishwasher",
+    microwave: "Microwave",
+    set: "Appliance set",
+    other: "Other appliance",
     miscellaneous: "Miscellaneous",
   })[category] ?? category.replaceAll("-", " ");
 export const formatPrice = (cents: number | null) =>
@@ -46,7 +50,9 @@ export function InventoryCard({ appliance }: { appliance: PublicAppliance }) {
             <small>Photo coming soon</small>
           </div>
         )}
-        <span className="status-badge">Available</span>
+        <span className="status-badge">
+          {appliance.availability === "reserved" ? "Reserved" : "Available"}
+        </span>
       </Link>
       <div className="inventory-body">
         <p className="card-category">{categoryLabel(appliance.category)}</p>

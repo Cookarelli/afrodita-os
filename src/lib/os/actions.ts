@@ -4,8 +4,9 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { requirePermission } from "@/lib/auth/session";
+import { hasPermission } from "@/lib/roles";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { applianceStatuses, publicInventoryFields } from "@/lib/os/inventory";
+import { applianceStatuses, inventoryCategories, publicInventoryFields } from "@/lib/os/inventory";
 
 const repairStatuses = [
   "new",
@@ -34,6 +35,347 @@ function redirectWithMessage(path: string, key: "success" | "error", message: st
 function normalizePhone(value: string) {
   const digits = value.replace(/\D/g, "");
   return digits.length === 10 ? `+1${digits}` : digits ? `+${digits}` : "";
+}
+
+const inventoryFormSchema = z.object({
+  id: z.uuid().optional().or(z.literal("")),
+  inventoryNumber: z.string().trim().max(80).optional(),
+  category: z.enum(inventoryCategories.map(([value]) => value) as [string, ...string[]]),
+  brand: z.string().trim().max(100).optional(),
+  model: z.string().trim().max(100).optional(),
+  serialNumber: z.string().trim().max(160).optional(),
+  color: z.string().trim().max(80).optional(),
+  condition: z.string().trim().max(200).optional(),
+  inventoryLocationId: z.uuid().optional().or(z.literal("")),
+  status: z.enum(applianceStatuses),
+  publicPrice: z.coerce.number().nonnegative().optional(),
+  minimumPrice: z.coerce.number().nonnegative().optional(),
+  acquisitionCost: z.coerce.number().nonnegative().optional(),
+  repairCost: z.coerce.number().nonnegative().optional(),
+  publicDescription: z.string().trim().max(4000).optional(),
+  internalNotes: z.string().trim().max(4000).optional(),
+  publicVisibility: z.string().optional(),
+  featured: z.string().optional(),
+});
+
+function cents(value: number | undefined) {
+  return value == null || Number.isNaN(value) ? null : Math.round(value * 100);
+}
+
+async function nextInventoryNumber(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  category: string,
+) {
+  const prefix = inventoryCategories.find(([value]) => value === category)?.[2] ?? "OTH";
+  const { data } = await supabase
+    .from("appliances")
+    .select("inventory_number")
+    .like("inventory_number", `AFR-${prefix}-%`)
+    .order("inventory_number", { ascending: false })
+    .limit(100);
+  const highest = Math.max(
+    0,
+    ...(data ?? []).map((row) => Number(row.inventory_number.split("-").at(-1)) || 0),
+  );
+  return `AFR-${prefix}-${String(highest + 1).padStart(4, "0")}`;
+}
+
+async function replaceCost(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  applianceId: string,
+  profileId: string | null,
+  costType: "acquisition" | "repair_part",
+  amountCents: number | null,
+) {
+  const { data: costs, error: lookupError } = await supabase
+    .from("appliance_costs")
+    .select("id")
+    .eq("appliance_id", applianceId)
+    .eq("cost_type", costType)
+    .is("archived_at", null)
+    .order("created_at")
+    .limit(1);
+  if (lookupError) throw lookupError;
+  const existing = costs?.[0];
+  if (amountCents == null) return;
+  if (existing) {
+    const { error } = await supabase
+      .from("appliance_costs")
+      .update({ amount_cents: amountCents })
+      .eq("id", existing.id);
+    if (error) throw error;
+    return;
+  }
+  const { error } = await supabase.from("appliance_costs").insert({
+    appliance_id: applianceId,
+    cost_type: costType,
+    amount_cents: amountCents,
+    created_by_profile_id: profileId,
+  });
+  if (error) throw error;
+}
+
+async function saveInventoryCosts(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  applianceId: string,
+  profileId: string | null,
+  input: z.infer<typeof inventoryFormSchema>,
+) {
+  await replaceCost(supabase, applianceId, profileId, "acquisition", cents(input.acquisitionCost));
+  await replaceCost(supabase, applianceId, profileId, "repair_part", cents(input.repairCost));
+}
+
+export async function createDetailedApplianceAction(formData: FormData) {
+  const context = await requirePermission("manage_inventory");
+  const input = inventoryFormSchema.safeParse(Object.fromEntries(formData));
+  if (!input.success || !context.organizationId)
+    redirectWithMessage("/os/inventory/new", "error", "Check the appliance details and try again.");
+  const publicFields = publicInventoryFields(
+    input.data.status,
+    input.data.publicVisibility === "on",
+  );
+  if (publicFields.public_visibility && !input.data.inventoryLocationId)
+    redirectWithMessage(
+      "/os/inventory/new",
+      "error",
+      "A public appliance needs an active store location.",
+    );
+  if (
+    (input.data.acquisitionCost != null || input.data.repairCost != null) &&
+    !hasPermission(context, "view_raw_costs")
+  )
+    redirectWithMessage(
+      "/os/inventory/new",
+      "error",
+      "You do not have permission to save cost data.",
+    );
+  const supabase = await createSupabaseServerClient();
+  const inventoryNumber =
+    input.data.inventoryNumber || (await nextInventoryNumber(supabase, input.data.category));
+  const { data: appliance, error } = await supabase
+    .from("appliances")
+    .insert({
+      organization_id: context.organizationId,
+      inventory_number: inventoryNumber,
+      qr_lookup_id: `os_${crypto.randomUUID().replaceAll("-", "")}`,
+      category: input.data.category,
+      brand: input.data.brand || null,
+      model: input.data.model || null,
+      serial_number: input.data.serialNumber || null,
+      color: input.data.color || null,
+      condition: input.data.condition || null,
+      inventory_location_id: input.data.inventoryLocationId || null,
+      status: input.data.status,
+      public_price_cents: cents(input.data.publicPrice),
+      minimum_authorized_price_cents: cents(input.data.minimumPrice),
+      public_visibility: publicFields.public_visibility,
+      featured: input.data.featured === "on",
+      public_description: input.data.publicDescription || null,
+      internal_notes: input.data.internalNotes || null,
+      available_at: publicFields.available_at,
+      created_by_profile_id: context.profileId,
+    })
+    .select("id")
+    .single();
+  if (error || !appliance)
+    redirectWithMessage(
+      "/os/inventory/new",
+      "error",
+      "The appliance could not be saved. Inventory numbers must be unique.",
+    );
+  if (hasPermission(context, "view_raw_costs")) {
+    try {
+      await saveInventoryCosts(supabase, appliance.id, context.profileId, input.data);
+    } catch {
+      redirectWithMessage(
+        `/os/inventory/${appliance.id}`,
+        "error",
+        "Appliance saved, but cost data needs review.",
+      );
+    }
+  }
+  revalidatePath("/os/inventory");
+  redirect(`/os/inventory/${appliance.id}`);
+}
+
+export async function updateDetailedApplianceAction(formData: FormData) {
+  const context = await requirePermission("manage_inventory");
+  const input = inventoryFormSchema.safeParse(Object.fromEntries(formData));
+  if (!input.success || !input.data.id)
+    redirectWithMessage("/os/inventory", "error", "Invalid appliance update.");
+  const publicFields = publicInventoryFields(
+    input.data.status,
+    input.data.publicVisibility === "on",
+  );
+  if (publicFields.public_visibility && !input.data.inventoryLocationId)
+    redirectWithMessage(
+      `/os/inventory/${input.data.id}`,
+      "error",
+      "A public appliance needs an active store location.",
+    );
+  const supabase = await createSupabaseServerClient();
+  const { error } = await supabase
+    .from("appliances")
+    .update({
+      inventory_number: input.data.inventoryNumber || undefined,
+      category: input.data.category,
+      brand: input.data.brand || null,
+      model: input.data.model || null,
+      serial_number: input.data.serialNumber || null,
+      color: input.data.color || null,
+      condition: input.data.condition || null,
+      inventory_location_id: input.data.inventoryLocationId || null,
+      status: input.data.status,
+      public_price_cents: cents(input.data.publicPrice),
+      minimum_authorized_price_cents: cents(input.data.minimumPrice),
+      public_visibility: publicFields.public_visibility,
+      featured: input.data.featured === "on",
+      public_description: input.data.publicDescription || null,
+      internal_notes: input.data.internalNotes || null,
+      available_at: publicFields.available_at,
+    })
+    .eq("id", input.data.id);
+  if (error)
+    redirectWithMessage(
+      `/os/inventory/${input.data.id}`,
+      "error",
+      "The appliance could not be updated.",
+    );
+  if (hasPermission(context, "view_raw_costs")) {
+    try {
+      await saveInventoryCosts(supabase, input.data.id, context.profileId, input.data);
+    } catch {
+      redirectWithMessage(
+        `/os/inventory/${input.data.id}`,
+        "error",
+        "Appliance saved, but cost data needs review.",
+      );
+    }
+  }
+  revalidatePath("/os/inventory");
+  revalidatePath("/shop");
+  revalidatePath("/");
+  redirectWithMessage(`/os/inventory/${input.data.id}`, "success", "Appliance updated.");
+}
+
+export async function registerAppliancePhotoAction(formData: FormData) {
+  const context = await requirePermission("manage_inventory");
+  const input = z
+    .object({ applianceId: z.uuid(), path: z.string().min(1).max(500) })
+    .safeParse(Object.fromEntries(formData));
+  if (!input.success || !context.organizationId) throw new Error("Invalid photo upload.");
+  const supabase = await createSupabaseServerClient();
+  const { data: appliance } = await supabase
+    .from("appliances")
+    .select("organization_id")
+    .eq("id", input.data.applianceId)
+    .maybeSingle();
+  const prefix = `organization/${context.organizationId}/appliances/${input.data.applianceId}/`;
+  if (
+    !appliance ||
+    appliance.organization_id !== context.organizationId ||
+    !input.data.path.startsWith(prefix)
+  )
+    throw new Error("Invalid photo upload.");
+  const { data: photos } = await supabase
+    .from("appliance_photos")
+    .select("sort_order")
+    .eq("appliance_id", input.data.applianceId)
+    .is("archived_at", null)
+    .order("sort_order", { ascending: false })
+    .limit(1);
+  const { error } = await supabase.from("appliance_photos").insert({
+    appliance_id: input.data.applianceId,
+    object_path: input.data.path,
+    sort_order: (photos?.[0]?.sort_order ?? -1) + 1,
+    public_eligible: true,
+    uploaded_by_profile_id: context.profileId,
+  });
+  if (error) throw new Error("Photo metadata could not be saved.");
+  revalidatePath(`/os/inventory/${input.data.applianceId}`);
+  revalidatePath("/shop");
+}
+
+export async function setApplianceCoverPhotoAction(formData: FormData) {
+  await requirePermission("manage_inventory");
+  const input = z
+    .object({ applianceId: z.uuid(), photoId: z.uuid() })
+    .safeParse(Object.fromEntries(formData));
+  if (!input.success) throw new Error("Invalid photo update.");
+  const supabase = await createSupabaseServerClient();
+  const { data: photos } = await supabase
+    .from("appliance_photos")
+    .select("id")
+    .eq("appliance_id", input.data.applianceId)
+    .is("archived_at", null)
+    .order("created_at");
+  for (const [index, photo] of (photos ?? [])
+    .sort((a, b) => (a.id === input.data.photoId ? -1 : b.id === input.data.photoId ? 1 : 0))
+    .entries()) {
+    await supabase
+      .from("appliance_photos")
+      .update({ sort_order: index, public_eligible: true })
+      .eq("id", photo.id);
+  }
+  revalidatePath(`/os/inventory/${input.data.applianceId}`);
+  revalidatePath("/shop");
+}
+
+export async function moveAppliancePhotoAction(formData: FormData) {
+  await requirePermission("manage_inventory");
+  const input = z
+    .object({ applianceId: z.uuid(), photoId: z.uuid(), direction: z.enum(["up", "down"]) })
+    .safeParse(Object.fromEntries(formData));
+  if (!input.success) throw new Error("Invalid photo order.");
+  const supabase = await createSupabaseServerClient();
+  const { data: photos } = await supabase
+    .from("appliance_photos")
+    .select("id, sort_order")
+    .eq("appliance_id", input.data.applianceId)
+    .is("archived_at", null)
+    .order("sort_order");
+  const index = (photos ?? []).findIndex((photo) => photo.id === input.data.photoId);
+  const targetIndex = input.data.direction === "up" ? index - 1 : index + 1;
+  const current = photos?.[index];
+  const target = photos?.[targetIndex];
+  if (!current || !target) return;
+  await supabase.from("appliance_photos").update({ sort_order: -1 }).eq("id", current.id);
+  await supabase
+    .from("appliance_photos")
+    .update({ sort_order: current.sort_order })
+    .eq("id", target.id);
+  await supabase
+    .from("appliance_photos")
+    .update({ sort_order: target.sort_order })
+    .eq("id", current.id);
+  revalidatePath(`/os/inventory/${input.data.applianceId}`);
+}
+
+export async function deleteAppliancePhotoAction(formData: FormData) {
+  await requirePermission("manage_inventory");
+  const input = z
+    .object({ applianceId: z.uuid(), photoId: z.uuid() })
+    .safeParse(Object.fromEntries(formData));
+  if (!input.success) throw new Error("Invalid photo deletion.");
+  const supabase = await createSupabaseServerClient();
+  const { data: photo } = await supabase
+    .from("appliance_photos")
+    .select("object_path")
+    .eq("id", input.data.photoId)
+    .eq("appliance_id", input.data.applianceId)
+    .maybeSingle();
+  if (!photo) throw new Error("Photo not found.");
+  const { error: removeError } = await supabase.storage
+    .from("appliance-photos")
+    .remove([photo.object_path]);
+  if (removeError) throw new Error("Photo could not be deleted.");
+  const { error } = await supabase
+    .from("appliance_photos")
+    .update({ archived_at: new Date().toISOString() })
+    .eq("id", input.data.photoId);
+  if (error) throw new Error("Photo metadata could not be deleted.");
+  revalidatePath(`/os/inventory/${input.data.applianceId}`);
+  revalidatePath("/shop");
 }
 
 export async function createApplianceAction(formData: FormData) {
